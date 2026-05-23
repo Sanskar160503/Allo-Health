@@ -139,33 +139,3 @@ quantity   — units held
 Key design decision: `available = total - reserved` is never stored — it's
 always computed. This prevents the stock count from going stale.
 
----
-
-## Trade-offs & What I'd Do Differently
-
-**Trade-offs made:**
-
-1. **Redis lock scope** — one lock per product+warehouse rather than per-SKU.
-   Simpler and correct for this model. At higher scale you'd want finer granularity.
-
-2. **Cron frequency** — hourly on free tier instead of every minute.
-   Lazy cleanup on confirm covers the gap in correctness.
-
-3. **No idempotency keys** — if a client retries a reservation request, a duplicate
-   reservation could be created. With more time I'd add an `Idempotency-Key` header
-   stored in Redis with a 24-hour TTL.
-
-4. **No pagination** — the products endpoint returns all products. Fine for demo
-   scale, would need cursor-based pagination in production.
-
-5. **Stock refresh** — the product listing page doesn't auto-refresh stock counts
-   after reserving. A WebSocket or polling interval would make this feel more live.
-
-**With more time:**
-- Add idempotency keys on reserve and confirm endpoints
-- Add integration tests specifically for the concurrency scenario
-  (two simultaneous requests for the last unit — exactly one should succeed)
-- Use Postgres `SELECT FOR UPDATE` as an alternative to Redis to reduce
-  infrastructure complexity
-- Add optimistic UI updates so available stock decrements immediately on reserve
-- Add proper error boundaries and loading skeletons in the frontend
