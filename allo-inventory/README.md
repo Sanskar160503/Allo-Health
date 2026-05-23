@@ -154,3 +154,18 @@ support idempotency via an `Idempotency-Key` header.
 
 This means a client can safely retry a timed-out request without creating
 duplicate reservations or double-confirming a payment.
+
+## Testing Idempotency
+
+Send two POST requests to `/api/reservations` with the same `Idempotency-Key` header.
+The second request will return the identical response without creating a new reservation.
+
+Example using curl:
+```bash
+curl -X POST https://allo-inventory-liart.vercel.app/api/reservations \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: test-key-123" \
+  -d '{"productId":"...","warehouseId":"...","quantity":1}'
+```
+
+Run the same command twice — both responses will have the same reservation ID.
