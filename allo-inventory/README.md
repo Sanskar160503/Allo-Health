@@ -139,3 +139,18 @@ quantity   — units held
 Key design decision: `available = total - reserved` is never stored — it's
 always computed. This prevents the stock count from going stale.
 
+## Idempotency
+
+The `POST /api/reservations` and `POST /api/reservations/:id/confirm` endpoints
+support idempotency via an `Idempotency-Key` header.
+
+**How it works:**
+1. Client generates a unique key (e.g. `crypto.randomUUID()`) and sends it as
+   `Idempotency-Key: <uuid>` with the request
+2. Server checks Redis for `idempotency:<key>`
+3. If found — return the cached response immediately, no side effects
+4. If not found — run the operation, store the response in Redis with 24hr TTL,
+   return the response
+
+This means a client can safely retry a timed-out request without creating
+duplicate reservations or double-confirming a payment.
