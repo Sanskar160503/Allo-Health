@@ -14,7 +14,7 @@ https://github.com/Sanskar160503/Allo-Health
 
 The core challenge is a race condition at checkout: two users can simultaneously
 read the same available stock, both believe they can reserve, and both succeed —
-leaving stock at -1. 
+leaving stock at -1.
 
 The solution is a **reservation system** with three states:
 - `PENDING` — units are held for 10 minutes while payment processes
@@ -44,7 +44,7 @@ preventing a slow request from accidentally releasing another request's lock.
 
 **Alternative considered:** Postgres `SELECT FOR UPDATE` row-level locking.
 This would work equally well and reduce infrastructure complexity (no Redis needed).
-I chose Redis because it's explicit, easy to reason about, and scales across
+I chose Redis because it is explicit, easy to reason about, and scales across
 multiple server instances without database coupling.
 
 ---
@@ -65,8 +65,40 @@ and decrements `StockLevel.reserved` in a Prisma transaction.
 The endpoint is protected by a `CRON_SECRET` bearer token to prevent abuse.
 
 **Trade-off:** With a Pro Vercel plan, the cron would run every minute,
-reducing the window where expired stock isn't returned to ~60 seconds.
+reducing the window where expired stock is not returned to ~60 seconds.
 On the free tier, lazy cleanup on confirm is the safety net.
+
+---
+
+## Idempotency
+
+The `POST /api/reservations` and `POST /api/reservations/:id/confirm` endpoints
+support idempotency via an `Idempotency-Key` header.
+
+**How it works:**
+1. Client generates a unique key (e.g. `crypto.randomUUID()`) and sends it as
+   `Idempotency-Key: <uuid>` with the request
+2. Server checks Redis for `idempotency:<key>`
+3. If found — return the cached response immediately, no side effects
+4. If not found — run the operation, store the response in Redis with 24hr TTL,
+   then return the response
+
+This means a client can safely retry a timed-out request without creating
+duplicate reservations or double-confirming a payment.
+
+**Testing idempotency:**
+
+Run the same curl command twice with the same key — both responses will have
+the identical reservation ID:
+
+```bash
+curl -X POST https://allo-inventory-liart.vercel.app/api/reservations \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: test-key-123" \
+  -d '{"productId":"YOUR_PRODUCT_ID","warehouseId":"YOUR_WAREHOUSE_ID","quantity":1}'
+```
+
+Get product and warehouse IDs from `/api/products`.
 
 ---
 
@@ -135,37 +167,50 @@ Reservation
 status     — PENDING | CONFIRMED | RELEASED
 expiresAt  — 10 minutes from creation
 quantity   — units held
-
-Key design decision: `available = total - reserved` is never stored — it's
+Key design decision: `available = total - reserved` is never stored — it is
 always computed. This prevents the stock count from going stale.
 
-## Idempotency
+---
 
-The `POST /api/reservations` and `POST /api/reservations/:id/confirm` endpoints
-support idempotency via an `Idempotency-Key` header.
+## Trade-offs & What I'd Do Differently
 
-**How it works:**
-1. Client generates a unique key (e.g. `crypto.randomUUID()`) and sends it as
-   `Idempotency-Key: <uuid>` with the request
-2. Server checks Redis for `idempotency:<key>`
-3. If found — return the cached response immediately, no side effects
-4. If not found — run the operation, store the response in Redis with 24hr TTL,
-   return the response
+**Trade-offs made:**
 
-This means a client can safely retry a timed-out request without creating
-duplicate reservations or double-confirming a payment.
+1. **Redis lock scope** — one lock per product+warehouse rather than per-SKU.
+   Simpler and correct for this model. At higher scale you would want finer granularity.
 
-## Testing Idempotency
+2. **Cron frequency** — hourly on free tier instead of every minute.
+   Lazy cleanup on confirm covers the gap in correctness.
 
-Send two POST requests to `/api/reservations` with the same `Idempotency-Key` header.
-The second request will return the identical response without creating a new reservation.
+3. **No pagination** — the products endpoint returns all products. Fine for demo
+   scale, would need cursor-based pagination in production.
 
-Example using curl:
-```bash
-curl -X POST https://allo-inventory-liart.vercel.app/api/reservations \
-  -H "Content-Type: application/json" \
-  -H "Idempotency-Key: test-key-123" \
-  -d '{"productId":"...","warehouseId":"...","quantity":1}'
-```
+4. **Stock display** — the "Reserved now" stat only shows a non-zero value while
+   a reservation is PENDING (between Reserve and Confirm/Cancel). Once confirmed,
+   reserved goes back to 0 and total is decremented — which is the correct behavior.
 
-Run the same command twice — both responses will have the same reservation ID.
+**With more time:**
+- Add integration tests specifically for the concurrency scenario
+  (two simultaneous requests for the last unit — exactly one should succeed)
+- Use Postgres `SELECT FOR UPDATE` as an alternative to Redis to reduce
+  infrastructure complexity
+- Add optimistic UI updates so available stock decrements immediately on reserve
+- Add proper error boundaries and loading skeletons throughout
+- Add cursor-based pagination for the products endpoint
+- Add WebSocket or Server-Sent Events for real-time stock updates across
+  multiple browser sessions
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Framework | Next.js 15 (App Router) |
+| Language | TypeScript |
+| Database | Postgres via Supabase |
+| ORM | Prisma 6 |
+| Cache / Lock | Redis via Upstash |
+| Validation | Zod |
+| Styling | Tailwind CSS |
+| Hosting | Vercel |
